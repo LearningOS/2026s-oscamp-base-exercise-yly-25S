@@ -38,7 +38,7 @@
 //! - fd number reuse strategy (find smallest free slot)
 //! - `Arc` reference counting and resource release
 
-use std::sync::Arc;
+use std::{mem, sync::Arc};
 
 /// File abstraction trait — all "files" in the kernel (regular files, pipes, sockets) implement this
 pub trait File: Send + Sync {
@@ -51,13 +51,13 @@ pub struct FdTable {
     // TODO: Design the internal structure
     // Hint: use Vec<Option<Arc<dyn File>>>
     //       the index is the fd number, None means the fd is closed or unallocated
+    table: Vec<Option<Arc<dyn File>>>
 }
 
 impl FdTable {
     /// Create an empty fd table
     pub fn new() -> Self {
-        // TODO
-        todo!()
+        FdTable { table: vec![]}
     }
 
     /// Allocate a new fd, return the fd number.
@@ -65,6 +65,18 @@ impl FdTable {
     /// Prefers reusing the smallest closed fd number; if no free slot, appends to the end.
     pub fn alloc(&mut self, file: Arc<dyn File>) -> usize {
         // TODO
+        let mut alloc_iter = self.table.iter_mut().filter(|e|e.is_some());
+        while let Some(x) = alloc_iter.next() {
+            match x {
+                Some(_) => continue, // allocated fd
+                None => {
+                    mem::swap(&mut Some(file.clone()), x); // closed fd
+                      
+                },
+            }
+        }
+        // no free slot
+        self.table.push();
         todo!()
     }
 
