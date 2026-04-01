@@ -15,6 +15,9 @@
 
 #![cfg(target_arch = "riscv64")]
 
+use core::arch::asm;
+use core::arch::naked_asm;
+
 /// Saved register state for one task (riscv64). Layout must match the offsets used in the asm below: for one task (riscv64). Layout must match the offsets used in the asm below:
 /// `sp` at 0, `ra` at 8, then `s0`–`s11` at 16, 24, … 104.
 #[repr(C)]
@@ -62,7 +65,12 @@ impl TaskContext {
     /// - Set `sp = stack_top` with 16-byte alignment (RISC-V ABI requires 16-byte aligned stack at function entry).
     /// - Leave `s0`–`s11` zero; they will be loaded on switch.
     pub fn init(&mut self, stack_top: usize, entry: usize) {
-        todo!("set ra = entry, sp = stack_top (16-byte aligned)")
+        // stack grows to low address
+        let aligned_stack_top = stack_top - (stack_top % 16);
+        unsafe {
+            asm!("mov ra, {}", in(reg) entry);
+            asm!("mov sp, {}", in(reg) aligned_stack_top);
+        }
     }
 }
 
@@ -71,8 +79,46 @@ impl TaskContext {
 /// In asm: store `sp`, `ra`, `s0`–`s11` to `[a0]` (old), load from `[a1]` (new), zero `a0`/`a1` so we do not leak pointers into the new context, then `ret`.
 ///
 /// Must be `#[unsafe(naked)]` to prevent the compiler from generating a prologue/epilogue.
-pub unsafe fn switch_context(old: &mut TaskContext, new: &TaskContext) {
-    todo!("save callee-saved regs to old, load from new, then ret; use #[unsafe(naked)] + naked_asm!, see module doc for riscv64 ABI and layout")
+#[unsafe(naked)]
+pub unsafe extern "C" fn switch_context(old: &mut TaskContext, new: &TaskContext) {
+    naked_asm!(
+        "sw 0(a0), sp",
+        "sw 8(a0), ra",
+        "sw 16(a0), s0",
+        "sw 16(a0), s0",
+        "sw 24(a0), s1",
+        "sw 32(a0), s2",
+        "sw 40(a0), s3",
+        "sw 48(a0), s4",
+        "sw 56(a0), s5",
+        "sw 64(a0), s6",
+        "sw 72(a0), s7",
+        "sw 80(a0), s8",
+        "sw 88(a0), s9",
+        "sw 96(a0), s10",
+        "sw 104(a0), s11",
+
+        //load from new
+        "lw sp, 0(a1)",
+        "lw ra, 8(a1)",
+        "lw s0, 16(a1)",
+        "lw s1, 24(a1)",
+        "lw s2, 32(a1)",
+        "lw s3, 40(a1)",
+        "lw s4, 48(a1)",
+        "lw s5, 56(a1)",
+        "lw s6, 64(a1)",
+        "lw s7, 72(a1)",
+        "lw s8, 80(a1)",
+        "lw s9, 88(a1)",
+        "lw s10, 96(a1)",
+        "lw s11, 104(a1)",
+
+        //zero a0/a1
+        "mv a0, zero",
+        "mv a1, zero",
+        "ret"
+    );
 }
 
 const STACK_SIZE: usize = 1024 * 64;

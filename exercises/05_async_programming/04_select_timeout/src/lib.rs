@@ -8,7 +8,7 @@
 //! - The first completed branch is executed, others are cancelled
 
 use std::future::Future;
-use tokio::time::{sleep, Duration};
+use tokio::{select, time::{Duration, sleep, timeout}};
 
 /// Async operation with timeout.
 /// If `future` completes within `timeout_ms` milliseconds, returns Some(result).
@@ -21,7 +21,10 @@ where
 {
     // TODO: Use tokio::select! to race between future and sleep
     // Or use tokio::time::timeout
-    todo!()
+    let Ok(x) = timeout(Duration::from_millis(timeout_ms), future).await else {
+        return None;
+    };
+    Some(x)
 }
 
 /// Race two async tasks, return the result of whichever finishes first.
@@ -34,7 +37,10 @@ where
 {
     // TODO: Use tokio::select! to wait for f1 and f2
     // Return the result of whichever completes first
-    todo!()
+    select! {
+        v = f1 => v,
+        v = f2 => v, 
+    }
 }
 
 #[cfg(test)]

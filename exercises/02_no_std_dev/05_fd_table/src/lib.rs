@@ -65,37 +65,50 @@ impl FdTable {
     /// Prefers reusing the smallest closed fd number; if no free slot, appends to the end.
     pub fn alloc(&mut self, file: Arc<dyn File>) -> usize {
         // TODO
-        let mut alloc_iter = self.table.iter_mut().filter(|e|e.is_some());
+        let mut alloc_iter = self.table.iter_mut().enumerate();
         while let Some(x) = alloc_iter.next() {
             match x {
-                Some(_) => continue, // allocated fd
-                None => {
-                    mem::swap(&mut Some(file.clone()), x); // closed fd
-                      
+                (_,Some(_)) => continue, // allocated fd
+                (i,None) => {
+                    mem::swap(&mut Some(file.clone()), x.1); // closed fd
+                    return i;
                 },
             }
         }
         // no free slot
-        self.table.push();
-        todo!()
+        self.table.push(Some(file));
+        return self.table.len() - 1;
     }
 
     /// Get the file object for an fd. Returns None if the fd doesn't exist or is closed.
     pub fn get(&self, fd: usize) -> Option<Arc<dyn File>> {
-        // TODO
-        todo!()
+        match self.table.get(fd) {
+            Some(x) => x.clone(),
+            None => None,
+        }
     }
 
     /// Close an fd. Returns true on success, false if the fd doesn't exist or is already closed.
     pub fn close(&mut self, fd: usize) -> bool {
-        // TODO
-        todo!()
+        if let Some(y) = self.table.get_mut(fd) {
+            if let Some(x) = y {
+                // fd is open
+                *y=None;
+                return true;
+            } else {
+                // fd is already closed
+                return false;
+            }
+        } else {
+            // fd non-existent
+            return false;
+        }
     }
 
     /// Return the number of currently allocated fds (excluding closed ones)
     pub fn count(&self) -> usize {
         // TODO
-        todo!()
+        self.table.iter().filter(|e|e.is_some()).count()
     }
 }
 
