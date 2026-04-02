@@ -47,7 +47,7 @@ pub enum ThreadState {
     Running,
     Finished,
 }
-
+#[derive(Debug)]
 struct GreenThread {
     ctx: TaskContext,
     state: ThreadState,
@@ -138,12 +138,21 @@ impl Scheduler {
     /// 3. Push a `GreenThread` with this context, state `Ready`, and `entry` stored for the wrapper to call.
     pub fn spawn(&mut self, entry: extern "C" fn()) {
         let stack = Vec::with_capacity(STACK_SIZE);
+        let stack_top = stack.as_ptr() as u64 + stack.capacity() as u64;
+        let aligned_sp = (stack_top - 16) & !15;
+        let ctx = TaskContext {
+            sp: aligned_sp,
+            ra: thread_wrapper as *const fn() as u64,
+            ..Default::default()
+        };
         let new_t = GreenThread {
-            ctx: TaskContext {
-                
-            }
-        }
-        todo!("alloc stack, init ctx with ra=thread_wrapper and aligned sp, push GreenThread(Ready, entry)")
+            ctx: ctx,
+            state: ThreadState::Ready,
+            _stack: Some(stack),
+            entry: Some(entry),
+        };
+        self.threads.push(new_t);
+        // todo!("alloc stack, init ctx with ra=thread_wrapper and aligned sp, push GreenThread(Ready, entry)")
     }
 
     /// Run the scheduler until all threads (except the main one) are `Finished`.
@@ -152,12 +161,47 @@ impl Scheduler {
     /// 2. Loop: if all threads in `threads[1..]` are `Finished`, break; otherwise call `schedule_next()` (which may switch away and later return).
     /// 3. Clear `SCHEDULER` when done.
     pub fn run(&mut self) {
-        todo!("set SCHEDULER to self, loop until threads[1..] all Finished, call schedule_next, then clear SCHEDULER")
+        unsafe {SCHEDULER = self as *mut Scheduler;}
+        while self.threads.len() - 1 > self.threads[1..].iter().filter(|t|t.state == ThreadState::Finished).count(){
+            self.schedule_next();
+        }
+        unsafe {SCHEDULER = std::ptr::null_mut();} 
+        // todo!("set SCHEDULER to self, loop until threads[1..] all Finished, call schedule_next, then clear SCHEDULER")
     }
 
     /// Find the next ready thread (starting from `current + 1` round-robin), mark current as `Ready` (if not `Finished`), mark next as `Running`, set `CURRENT_THREAD_ENTRY` if the next thread has an entry, then switch to it.
     fn schedule_next(&mut self) {
-        todo!("round-robin find next Ready, set current Ready (if not Finished), next Running, CURRENT_THREAD_ENTRY, then switch_context")
+        dbg!(self.current);
+        dbg!(&self.threads);
+        if self.threads[self.current].state != ThreadState::Finished {
+            self.threads[self.current].state = ThreadState::Ready;
+        }
+        let mut t = self.current;
+        let len = self.threads.len();
+        let next_thread_idx = loop {
+            t = (t + 1) % len;
+            if self.threads[t].state == ThreadState::Ready {
+                break t;
+            }
+            if t == self.current {
+                // looped through all threads, no Ready found
+                dbg!("schedule_next: no ready thread found");
+                return;
+            }
+        };
+        let next_thread: *mut GreenThread = &raw mut self.threads[next_thread_idx];
+        let current_thread: *mut GreenThread = &raw mut self.threads[self.current];
+        self.current = next_thread_idx;
+        unsafe {
+            (*next_thread).state = ThreadState::Running;
+            let current_ctx: &mut TaskContext = &mut (*current_thread).ctx;
+            CURRENT_THREAD_ENTRY = (*next_thread).entry;
+            // dbg!(next_thread_idx);
+            // dbg!(next_thread.entry);
+            switch_context(current_ctx, &(*next_thread).ctx);
+            return;
+        }
+        // todo!("round-robin find next Ready, set current Ready (if not Finished), next Running, CURRENT_THREAD_ENTRY, then switch_context")
     }
 }
 
@@ -176,6 +220,7 @@ static mut SCHEDULER: *mut Scheduler = std::ptr::null_mut();
 pub fn yield_now() {
     unsafe {
         if !SCHEDULER.is_null() {
+            dbg!((*SCHEDULER).current);
             (*SCHEDULER).schedule_next();
         }
     }
