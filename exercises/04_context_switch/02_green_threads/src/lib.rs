@@ -137,6 +137,12 @@ impl Scheduler {
     ///    `sp` must be 16-byte aligned (e.g. `(stack_top - 16) & !15` to leave headroom).
     /// 3. Push a `GreenThread` with this context, state `Ready`, and `entry` stored for the wrapper to call.
     pub fn spawn(&mut self, entry: extern "C" fn()) {
+        let stack = Vec::with_capacity(STACK_SIZE);
+        let new_t = GreenThread {
+            ctx: TaskContext {
+                
+            }
+        }
         todo!("alloc stack, init ctx with ra=thread_wrapper and aligned sp, push GreenThread(Ready, entry)")
     }
 
