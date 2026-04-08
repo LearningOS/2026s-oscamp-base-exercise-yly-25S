@@ -31,12 +31,81 @@ pub const PTE_V: u64 = 1 << 0;
 pub const PTE_R: u64 = 1 << 1;
 pub const PTE_W: u64 = 1 << 2;
 pub const PTE_X: u64 = 1 << 3;
+/// PTE flag constants
+// pub const PTE_V: u64 = 1 << 0; // Valid
+// pub const PTE_R: u64 = 1 << 1; // Readable
+// pub const PTE_W: u64 = 1 << 2; // Writable
+// pub const PTE_X: u64 = 1 << 3; // Executable
+pub const PTE_U: u64 = 1 << 4; // User accessible
+pub const PTE_G: u64 = 1 << 5; // Global
+pub const PTE_A: u64 = 1 << 6; // Accessed
+pub const PTE_D: u64 = 1 << 7; // Dirty
 
+/// PPN field offset and mask in PTE
+// const PPN_SHIFT: u32 = 10;
+const PPN_MASK: u64 = (1u64 << 44) - 1; // 44-bit PPN
+
+/// Construct a page table entry from physical page number (PPN) and flags.
+///
+/// PPN occupies bits [53:10], flags occupy bits [7:0].
+///
+/// Example: ppn=0x12345, flags=PTE_V|PTE_R|PTE_W
+/// Result should be: (0x12345 << 10) | 0b111 = 0x48D14007
+///
+/// Hint: Shift PPN left by PPN_SHIFT bits, then OR with flags.
+pub fn make_pte(ppn: u64, flags: u64) -> u64 {
+    // TODO: Construct page table entry using ppn and flags
+    ppn << PPN_SHIFT | flags
+}
+
+/// Extract physical page number (PPN) from page table entry.
+///
+/// Hint: Right shift by PPN_SHIFT bits, then AND with PPN_MASK.
+pub fn extract_ppn(pte: u64) -> u64 {
+    // TODO: Extract PPN from pte
+    pte >> PPN_SHIFT & PPN_MASK
+}
+
+/// Extract flags (lower 8 bits) from page table entry.
+pub fn extract_flags(pte: u64) -> u64 {
+    // TODO: Extract lower 8-bit flags
+    pte & 0xFFu64
+}
+
+/// Check whether page table entry is valid (V bit set).
+pub fn is_valid(pte: u64) -> bool {
+    // TODO: Check PTE_V
+    pte & PTE_V == 1
+}
+
+/// Determine whether page table entry is a leaf PTE.
+///
+/// In SV39, if any of R, W, X bits is set, the PTE is a leaf,
+/// pointing to the final physical page. Otherwise it points to next-level page table.
+pub fn is_leaf(pte: u64) -> bool {
+    // TODO: Check if any of R/W/X bits is set
+    pte & (PTE_R | PTE_W | PTE_X) != 0
+}
+
+/// Check whether page table entry permits the requested access based on given permissions.
+///
+/// - `read`: requires read permission
+/// - `write`: requires write permission
+/// - `execute`: requires execute permission
+///
+/// Returns true iff: PTE is valid, and each requested permission is satisfied.
+pub fn check_permission(pte: u64, read: bool, write: bool, execute: bool) -> bool {
+    // TODO: First check if valid, then check each requested permission
+    pte & PTE_V != 0 &&
+    !(read && (pte & PTE_R == 0)) && // R satisfied == ! (read is true and pte & pte_R == 0)
+    !(write && (pte & PTE_W == 0)) && // R satisfied
+    !(execute && (pte & PTE_X == 0)) // R satisfied
+}
 /// PPN 在 PTE 中的偏移
 const PPN_SHIFT: u32 = 10;
 
 /// 页表节点：一个包含 512 个条目的数组
-#[derive(Clone)]
+#[derive(Clone,Debug)]
 pub struct PageTableNode {
     pub entries: [u64; PT_ENTRIES],
 }
@@ -59,6 +128,7 @@ impl Default for PageTableNode {
 ///
 /// 使用 HashMap<u64, PageTableNode> 模拟物理内存中的页表页。
 /// `root_ppn` 是根页表所在的物理页号。
+#[derive(Debug)]
 pub struct Sv39PageTable {
     /// 物理页号 -> 页表节点
     nodes: HashMap<u64, PageTableNode>,
@@ -103,7 +173,7 @@ impl Sv39PageTable {
     /// 提示：右移 (12 + level * 9) 位，然后与 0x1FF 做掩码。
     pub fn extract_vpn(va: u64, level: usize) -> usize {
         // TODO: 从虚拟地址中提取指定级别的 VPN 索引
-        todo!()
+        (va >> (12 + level * 9) & 0x1FF) as usize
     }
 
     /// 建立从虚拟页到物理页的映射（4KB 页）。
@@ -119,7 +189,39 @@ impl Sv39PageTable {
         // 对于中间层级（level 2 和 level 1），如果对应 VPN 的页表项（PTE）无效（PTE_V == 0），
         // 则需要分配一个新的页表节点（使用 alloc_node），并将新节点的 PPN 写入当前 PTE（仅设置 PTE_V 标志）。
         // 最后在 level 0 的 PTE 中写入目标物理页号（pa >> 12）和 flags。
-        todo!()
+        // 解析level 2
+        let l0vpn = Self::extract_vpn(va, 0);
+        let l1vpn = Self::extract_vpn(va, 1);
+        let l2vpn = Self::extract_vpn(va, 2);
+        let l2_pt = self.nodes.get_mut(&self.root_ppn).unwrap(); // Must be present
+        let mut l2_pte = *l2_pt.entries.get(l2vpn).unwrap();
+
+        if !is_valid(l2_pte) {
+            let _ = l2_pt; // drop l2
+            let new_ppn = self.alloc_node();
+            let l2 = self.nodes.get_mut(&self.root_ppn).unwrap();
+            l2_pte = make_pte(new_ppn, PTE_V);
+            l2.entries[l2vpn] = l2_pte; // ENSURE 2
+        }
+
+        let l1_pte = {
+            let l1_pt = self.nodes.get_mut(&extract_ppn(l2_pte)).unwrap(); // 2
+            let mut e = *l1_pt.entries.get(l1vpn).unwrap(); // WONTFAIL
+            if !is_valid(e) {
+                let _ = l1_pt; // drop l2
+                let new_ppn = self.alloc_node();
+                let l1_pt = self.nodes.get_mut(&extract_ppn(l2_pte)).unwrap();
+                e = make_pte(new_ppn, PTE_V);
+                l1_pt.entries[l1vpn] = e; // ENSURE 1 
+            }
+            e
+        };
+
+        {
+            let l0_pt = self.nodes.get_mut(&extract_ppn(l1_pte)).unwrap(); // 1
+            let e = l0_pt.entries.get_mut(l0vpn).unwrap(); // WONTFAIL
+            *e= make_pte(pa>> 12 , flags);
+        }
     }
 
     /// 遍历三级页表，将虚拟地址翻译为物理地址。
@@ -141,7 +243,39 @@ impl Sv39PageTable {
         // 如果 PTE 是叶节点（即 R、W、X 标志位中有至少一个被置位），则可以直接使用该 PTE 中的物理页号（PPN）计算最终的物理地址。
         // 否则，该 PTE 指向下一级页表节点，继续遍历下一级。
         // 遍历到 level 0 时，PTE 必须是叶节点。
-        todo!()
+        
+        let l0vpn = Self::extract_vpn(va, 0);
+        let l1vpn = Self::extract_vpn(va, 1);
+        let l2vpn: usize = Self::extract_vpn(va, 2);
+        let Some(l2_pt) = self.nodes.get(&self.root_ppn) else {
+            return TranslateResult::PageFault;
+        };
+        let pte_to_l1 = l2_pt.entries.get(l2vpn).unwrap(); // WONTFAIL
+        if !is_valid(*pte_to_l1) || is_leaf(*pte_to_l1){
+            // no superpage in level 2
+            TranslateResult::PageFault
+        } else {
+            let Some(l1_pt) = self.nodes.get(&extract_ppn(*pte_to_l1)) else { return TranslateResult::PageFault};
+            let pte_to_l0_or_superpage = l1_pt.entries.get(l1vpn).unwrap();
+            if !is_valid(*pte_to_l0_or_superpage){
+                return TranslateResult::PageFault;
+            }
+            if is_leaf(*pte_to_l0_or_superpage) {
+                let offset = (l0vpn << 12) as u64 + (va & 0xFFF);
+                let pa = (extract_ppn(*pte_to_l0_or_superpage) << 12)+ offset;
+                TranslateResult::Ok(pa)
+            } else {
+                let Some(l0_pt) = self.nodes.get(&extract_ppn(*pte_to_l0_or_superpage)) else {return TranslateResult::PageFault};
+                let pte = l0_pt.entries.get(l0vpn).unwrap();
+                if is_valid(*pte) && is_leaf(*pte) {
+                    let ppn = extract_ppn(*pte);
+                    let pa = (ppn << 12) + (va & 0xFFFu64);
+                    TranslateResult::Ok(pa)
+                } else {
+                    TranslateResult::PageFault
+                }
+            }
+        }
     }
 
     /// 建立大页映射（2MB superpage，在 level 1 设叶子 PTE）。
@@ -160,7 +294,23 @@ impl Sv39PageTable {
         // 你需要在 level 2 找到或创建中间页表节点，然后在 level 1 写入叶子 PTE。
         // 注意大页的物理页号计算方式与普通页相同（pa >> 12），
         // 但翻译时 offset 包含虚拟地址的低 21 位（VPN[0] 部分 + 12 位页内偏移）。
-        todo!()
+        let l2vpn = Self::extract_vpn(va, 2);
+        let l1vpn = Self::extract_vpn(va, 1);
+        let pte_to_l1 = {
+            let l2_pt = self.nodes.get_mut(&self.root_ppn).unwrap();
+            *l2_pt.entries.get(l2vpn).unwrap()
+        };
+        if !is_valid(pte_to_l1) {
+            let new_ppn = self.alloc_node();
+            let l2_pt = self.nodes.get_mut(&self.root_ppn).unwrap();
+            let pte_to_l1_mut = l2_pt.entries.get_mut(l2vpn).unwrap();
+            *pte_to_l1_mut = make_pte(new_ppn, PTE_V);
+        }
+        let l2_pt = self.nodes.get(&self.root_ppn).unwrap();
+        let pte_to_l1 = *l2_pt.entries.get(l2vpn).unwrap();
+        let l1_pt = self.nodes.get_mut(&extract_ppn(pte_to_l1)).unwrap(); // WONTFAIL
+        let pte_to_superpage = l1_pt.entries.get_mut(l1vpn).unwrap();
+        *pte_to_superpage = make_pte(pa >> 12, flags);
     }
 }
 
